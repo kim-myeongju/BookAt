@@ -2,7 +2,10 @@ package com.bookat.service.impl;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -45,7 +48,7 @@ public class UserLoginServiceImpl implements UserLoginService {
 		
 //		user.setRefreshToken(refreshToken);
 		
-		// 리프레시토큰 디비 저장
+		// 리프레시토큰 DB 저장
 //		Map<String, String> values = new HashMap<>();
 //		values.put("refreshToken", user.getRefreshToken());
 //		values.put("userId", user.getUserId());

@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -30,6 +31,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +45,7 @@ public class UserLoginController {
 
     private final JwtTokenProvider jwtTokenProvider;
 	private final UserLoginServiceImpl loginService;
+	private final RedisTemplate<String, String> redisTemplate;
 	
 	// 아이디 찾기 간편인증 정보
     @Value("${portone.public.store-id}")
@@ -64,16 +67,31 @@ public class UserLoginController {
 	public ResponseEntity<?> login(@RequestBody UserLoginRequest userLoginRequest, HttpServletResponse response) {
 		
 		try {
-			// refresh token 은 Service 에서 디비에 저장 (지금은 비활성화)
 			UserLoginResponse tokens = loginService.login(userLoginRequest);
+			String userId = userLoginRequest.getUserId();
+			String refreshToken = tokens.getRefreshToken();
+			long loginTime = System.currentTimeMillis();
+			
+			// refresh token 과 로그인한 시간을 저장
+			Map<String, String> redisValue = new HashMap<>();
+			redisValue.put("refreshToken", refreshToken);
+			redisValue.put("lastLoginTime", String.valueOf(loginTime));
+			redisTemplate.opsForHash().putAll(userId, redisValue);
 			
 			// refresh token 쿠키 저장
-			Cookie refreshCookie  = new Cookie("refreshToken", tokens.getRefreshToken());
+			Cookie refreshCookie  = new Cookie("refreshToken", refreshToken);
 			refreshCookie .setHttpOnly(true);
 //			refreshCookie .setSecure(true);
 			refreshCookie .setPath("/");
 			refreshCookie .setMaxAge(60 * 60 * 24 * 7);		// 7일
 			response.addCookie(refreshCookie);
+			
+			// 로그인 시간을 쿠키에 저장
+			Cookie loginTimeCookie = new Cookie("loginTime", String.valueOf(loginTime));
+			loginTimeCookie.setHttpOnly(true);
+			loginTimeCookie.setPath("/");
+			loginTimeCookie.setMaxAge(60 * 60 * 24 * 7);
+			response.addCookie(loginTimeCookie);
 			
 			return ResponseEntity.ok(new UserLoginResponse(tokens.getAccessToken(), null));
 		} catch (LoginException le) {
@@ -84,8 +102,9 @@ public class UserLoginController {
 	
 	// 로그아웃
 	@PostMapping("/logout")
-	public ResponseEntity<String> logout(@RequestHeader(value="Authorization", required=false) String accessToken, HttpServletResponse response) {
+	public ResponseEntity<String> logout(@RequestHeader(value="Authorization", required=false) String accessToken,  HttpServletRequest request, HttpServletResponse response) {
 		String userId = null;
+		long loginTime = -1;
 		
 		if(accessToken != null && accessToken.startsWith("Bearer ")) {
 	        try {
@@ -106,6 +125,25 @@ public class UserLoginController {
 	        }
 	    }
 	    */
+		
+		// 쿠키에서 로그인 시간을 변수에 저장
+		if(request.getCookies() != null) {
+			for(Cookie cookie : request.getCookies()) {
+				if(cookie.getName().equals("loginTime")) {
+					loginTime = Long.parseLong(cookie.getValue());
+				}
+			}
+		}
+		
+		if (userId != null && loginTime != -1) {
+			Map<Object, Object> redisValue = redisTemplate.opsForHash().entries(userId);
+			long lastLoginTime = Long.parseLong((String) redisValue.get("lastLoginTime"));
+			if(loginTime == lastLoginTime) {
+				// 같으면 → 현재 브라우저가 최신 로그인 브라우저임 → 안전하게 삭제 가능
+				// 다르면 → 이미 새 브라우저에서 로그인되어 Redis 값이 덮어써진 상태 → 다른 브라우저 로그아웃 영향 없음
+				redisTemplate.delete(userId);
+			}
+		}
 
 		// 쿠키 삭제
 	    Cookie refreshCookie = new Cookie("refreshToken", null);
@@ -113,6 +151,12 @@ public class UserLoginController {
 	    refreshCookie.setMaxAge(0);
 	    refreshCookie.setPath("/");
 	    response.addCookie(refreshCookie);
+	    
+	    Cookie loginTimeCookie = new Cookie("loginTime", null);
+	    loginTimeCookie.setHttpOnly(true);
+	    loginTimeCookie.setMaxAge(0);
+	    loginTimeCookie.setPath("/");
+	    response.addCookie(loginTimeCookie);
 
 	    return ResponseEntity.ok("로그아웃 성공");
 	}

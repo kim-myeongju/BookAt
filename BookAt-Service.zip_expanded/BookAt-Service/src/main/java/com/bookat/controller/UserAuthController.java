@@ -1,5 +1,8 @@
 package com.bookat.controller;
 
+import java.util.Map;
+
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -27,6 +30,7 @@ public class UserAuthController {
 	
     private final JwtTokenProvider jwtTokenProvider;
     private final UserLoginServiceImpl service;
+    private final RedisTemplate<String, String> redisTemplate;
 
 	// access token 검증 후 userId 전달
 	@PostMapping("/validate")
@@ -59,15 +63,19 @@ public class UserAuthController {
 	
 	// access token 재발급
 	@PostMapping("/refresh")
-	public ResponseEntity<?> refresh(HttpServletRequest request) {
+	public ResponseEntity<?> refresh(HttpServletRequest request, HttpServletResponse response) {
 		
 		String refreshToken = null;
+		long loginTime = -1;
 		
 		// 쿠키에서 refresh token 찾아 저장
 	    if (request.getCookies() != null) {
 	        for (Cookie cookie : request.getCookies()) {
 	            if (cookie.getName().equals("refreshToken")) {
 	                refreshToken = cookie.getValue();
+	            }
+	            if (cookie.getName().equals("loginTime")) {
+	            	loginTime = Long.parseLong(cookie.getValue());
 	            }
 	        }
 	    }
@@ -88,6 +96,33 @@ public class UserAuthController {
 //	    	// 디비에 저장된 refresh token 이랑 일치하는지 확인.
 //	        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("서버에 저장된 리프레시 토큰과 다름");
 //	    }
+	    
+	    Map<Object, Object> redisValue = redisTemplate.opsForHash().entries(userId);
+	    String redisRefreshToken = (String) redisValue.get("refreshToken");
+	    long lastLoginTime = Long.parseLong((String) redisValue.get("lastLoginTime"));
+	    
+	    if(!redisRefreshToken.equals(refreshToken) || loginTime != lastLoginTime) {
+	    	// 서버에 저장된 리프레시 토큰과 다르면 먼저 로그인했던 기기에서 쿠키 삭제 (로그아웃 처리)
+	    	// 로그인 시간을 비교해서 동시 로그인 시 과거 접속 브라우저에 쿠키 정보 삭제 (redis 서버에는 최신 로그인 시점에 refresh token, loginTime 이 덮어씌어진 상태)
+	    	
+	    	log.info("다른 기기에서 접속");
+	    	log.info("old refresh : {}", refreshToken);
+	    	log.info("redis refresh : {}", redisRefreshToken);
+	    	
+	    	Cookie refreshCookie = new Cookie("refreshToken", null);
+	    	refreshCookie.setHttpOnly(true);
+	    	refreshCookie.setMaxAge(0);
+	    	refreshCookie.setPath("/");
+	    	response.addCookie(refreshCookie);
+	    	
+	    	Cookie loginTimeCookie = new Cookie("loginTime", null);
+	    	loginTimeCookie.setHttpOnly(true);
+	    	loginTimeCookie.setMaxAge(0);
+	    	loginTimeCookie.setPath("/");
+	    	response.addCookie(loginTimeCookie);
+	    	
+	    	return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("서버에 저장된 리프레시 토큰과 다름. 다른 곳에서 로그인");
+	    }
 
 	    // refresh token 이 유효하다면 새로운 access token 발급
 	    String newAccessToken = jwtTokenProvider.generateAccessToken(userId);
