@@ -180,7 +180,9 @@ public class ReservationController {
 			PaymentInfoResDto getPaymentInfo = reservationService.getPaymentInfo(reservationToken);
 			
 			String enforcedMethod = "CARD";
-			PaymentDto pay = paymentService.createReadyPayment(getPaymentInfo.getTotalPrice(), enforcedMethod, getPaymentInfo.getTitle(), user.getUserId());
+			log.info("STEP3: calling paymentService.createReadyPayment()");
+			PaymentDto pay = paymentService.createReadyPayment(getPaymentInfo.getTotalPrice(), enforcedMethod, getPaymentInfo.getTitle(), user.getUserId(),null);
+			log.info("STEP3: payment created: {}", pay);
 			
 			PaymentReservationSession session = PaymentSessionStore.of(
 					reservationToken, 
